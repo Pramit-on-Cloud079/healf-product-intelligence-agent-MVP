@@ -1,0 +1,538 @@
+{
+  "name": "01 - Test Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "healf-product-intel",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        96
+      ],
+      "id": "d57ea09b-1f67-483d-95aa-5642a9294b71",
+      "name": "Webhook",
+      "webhookId": "ae9154fe-6392-4efd-a3b2-96252ee679b1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = items[0].json;\n\nconst rawUrl = String(\n  input.url ??\n  input.body?.url ??\n  input.body?.data?.url ??\n  ''\n).trim();\n\nconst rawQuestion = String(\n  input.question ??\n  input.body?.question ??\n  input.body?.data?.question ??\n  ''\n).trim();\n\nif (!rawUrl) {\n  throw new Error('Missing required field: url');\n}\n\nif (!rawQuestion) {\n  throw new Error('Missing required field: question');\n}\n\nlet normalizedUrl = rawUrl;\n\nif (normalizedUrl.startsWith('//')) {\n  normalizedUrl = `https:${normalizedUrl}`;\n} else if (!/^https?:\\/\\//i.test(normalizedUrl)) {\n  normalizedUrl = `https://${normalizedUrl}`;\n}\n\nconst match = normalizedUrl.match(/^https?:\\/\\/([^\\/?#]+)(\\/[^?#]*)?/i);\n\nif (!match) {\n  throw new Error(`Invalid URL provided: ${rawUrl}`);\n}\n\nconst domain = match[1];\nconst pathname = match[2] || '';\n\nconst handleMatch = pathname.match(/\\/products\\/([^/?#]+)/i);\n\nif (!handleMatch) {\n  throw new Error('Could not extract Shopify product handle from the URL');\n}\n\nconst handle = decodeURIComponent(handleMatch[1]);\n\nreturn [\n  {\n    json: {\n      url: normalizedUrl,\n      question: rawQuestion,\n      handle,\n      domain,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        96
+      ],
+      "id": "f2234743-a48b-4db8-8a55-30ca87e681c3",
+      "name": "Validate + Normalize Input"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        416,
+        96
+      ],
+      "id": "067bfc8b-5ca5-4170-ba77-8938d0e6620b",
+      "name": "Fetch Page HTML",
+      "retryOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Page Signals\n// Replace \"Fetch Page HTML\" with the exact name of your HTTP node\n// that returns the page HTML in a field called `data`.\n\nconst input = $('Validate + Normalize Input').first().json || {};\nconst pageNode = $('Fetch Page HTML').first().json || {};\n\nconst html = String(pageNode.data || '');\nconst url = input.url || null;\nconst question = input.question || null;\nconst handle = input.handle || null;\nconst domain = input.domain || null;\n\nfunction decodeEntities(str) {\n  if (!str) return '';\n  return String(str)\n    .replace(/&amp;/g, '&')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction firstMatch(re, text = html) {\n  const m = text.match(re);\n  return m?.[1] ? decodeEntities(m[1]) : null;\n}\n\nfunction stripHtml(input) {\n  return decodeEntities(\n    String(input)\n      .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n      .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n      .replace(/<noscript[\\s\\S]*?<\\/noscript>/gi, ' ')\n      .replace(/<template[\\s\\S]*?<\\/template>/gi, ' ')\n      .replace(/<iframe[\\s\\S]*?<\\/iframe>/gi, ' ')\n      .replace(/<svg[\\s\\S]*?<\\/svg>/gi, ' ')\n      .replace(/<[^>]+>/g, ' ')\n  );\n}\n\nfunction extractJsonLdBlocks(text) {\n  const blocks = [];\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n\n  for (const m of text.matchAll(re)) {\n    const raw = m[1]?.trim();\n    if (!raw) continue;\n    try {\n      blocks.push(JSON.parse(raw));\n    } catch {\n      // ignore invalid JSON-LD\n    }\n  }\n\n  return blocks;\n}\n\nfunction flattenJsonLd(blocks) {\n  const flat = [];\n  for (const block of blocks || []) {\n    if (Array.isArray(block)) flat.push(...block);\n    else if (block && typeof block === 'object') flat.push(block);\n  }\n  return flat;\n}\n\nfunction walkJsonLd(node, visit, seen = new Set()) {\n  if (!node || typeof node !== 'object') return;\n  if (seen.has(node)) return;\n  seen.add(node);\n\n  visit(node);\n\n  if (Array.isArray(node)) {\n    for (const item of node) walkJsonLd(item, visit, seen);\n    return;\n  }\n\n  for (const value of Object.values(node)) {\n    if (value && typeof value === 'object') {\n      walkJsonLd(value, visit, seen);\n    }\n  }\n}\n\nfunction coerceNumber(value) {\n  if (value === null || value === undefined) return null;\n  const n = Number(String(value).replace(/,/g, '').trim());\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction extractReviewSignals(htmlText, flatJsonLd) {\n  const reviewBlocks = [];\n  const aggregateRatings = [];\n\n  walkJsonLd(flatJsonLd, (node) => {\n    const type = node['@type'];\n    const types = Array.isArray(type) ? type : [type];\n\n    if (types.includes('Product') || types.includes('AggregateOffer') || types.includes('Review')) {\n      if (node.aggregateRating) aggregateRatings.push(node.aggregateRating);\n      if (node.review) reviewBlocks.push(node.review);\n      if (Array.isArray(node.reviews)) reviewBlocks.push(...node.reviews);\n    }\n\n    if (node.aggregateRating && !aggregateRatings.includes(node.aggregateRating)) {\n      aggregateRatings.push(node.aggregateRating);\n    }\n    if (node.review && !reviewBlocks.includes(node.review)) {\n      reviewBlocks.push(node.review);\n    }\n    if (Array.isArray(node.reviews)) {\n      for (const r of node.reviews) reviewBlocks.push(r);\n    }\n  });\n\n  const firstAgg = aggregateRatings.find(Boolean) || null;\n  const firstReview = reviewBlocks.find(Boolean) || null;\n\n  const ratingValue =\n    coerceNumber(firstAgg?.ratingValue) ??\n    coerceNumber(firstReview?.reviewRating?.ratingValue) ??\n    coerceNumber(firstMatch(/itemprop=[\"']ratingValue[\"'][^>]*content=[\"']([^\"']+)[\"']/i, htmlText)) ??\n    coerceNumber(firstMatch(/rated\\s+([0-9.]+)\\s+out of\\s+5/i, stripHtml(htmlText))) ??\n    null;\n\n  const reviewCount =\n    coerceNumber(firstAgg?.reviewCount) ??\n    coerceNumber(firstAgg?.ratingCount) ??\n    coerceNumber(firstMatch(/itemprop=[\"']reviewCount[\"'][^>]*content=[\"']([^\"']+)[\"']/i, htmlText)) ??\n    coerceNumber(firstMatch(/([\\d,]+)\\s+reviews?\\b/i, stripHtml(htmlText))) ??\n    null;\n\n  const bestRating =\n    coerceNumber(firstAgg?.bestRating) ??\n    coerceNumber(firstReview?.reviewRating?.bestRating) ??\n    null;\n\n  const worstRating =\n    coerceNumber(firstAgg?.worstRating) ??\n    coerceNumber(firstReview?.reviewRating?.worstRating) ??\n    null;\n\n  const ratingTextMatches = [...htmlText.matchAll(/rated\\s+([0-9.]+)\\s+out of\\s+5/gi)];\n  const reviewTextMatches = [...htmlText.matchAll(/([\\d,]+)\\s+reviews?\\b/gi)];\n  const reviewSectionMentions = [...htmlText.matchAll(/\\breviews?\\b/gi)].length;\n\n  const hasReviews =\n    reviewCount !== null ||\n    ratingValue !== null ||\n    reviewBlocks.length > 0 ||\n    reviewSectionMentions > 0 ||\n    ratingTextMatches.length > 0;\n\n  return {\n    hasReviews,\n    reviewCount,\n    ratingValue,\n    bestRating,\n    worstRating,\n    jsonLdReviewBlockCount: reviewBlocks.length,\n    jsonLdAggregateRatingCount: aggregateRatings.length,\n    reviewTextMentions: reviewSectionMentions,\n    reviewMentionSamples: reviewTextMatches.slice(0, 5).map((m) => m[0]),\n    ratingMentionSamples: ratingTextMatches.slice(0, 5).map((m) => m[0]),\n    reviewSource: reviewBlocks.length > 0 || aggregateRatings.length > 0 ? 'jsonld' : 'html',\n    rawReviewBlocks: reviewBlocks.slice(0, 5),\n    rawAggregateRatings: aggregateRatings.slice(0, 5),\n  };\n}\n\nfunction extractImageUrls(text) {\n  const urls = [];\n\n  // Absolute image URLs\n  const abs = text.match(/https?:\\/\\/[^\"'`\\s>]+?\\.(?:png|jpe?g|webp|avif)(?:\\?[^\"'`\\s>]*)?/gi) || [];\n  urls.push(...abs);\n\n  // Next.js image URLs\n  const nextImageMatches = [...text.matchAll(/\\/_next\\/image\\?url=([^\"'`\\s>]+?)(?:&[^\"'`\\s>]*)?/gi)];\n  for (const m of nextImageMatches) {\n    try {\n      const decoded = decodeURIComponent(m[1]);\n      if (decoded.startsWith('http')) {\n        urls.push(decoded);\n      } else if (domain) {\n        urls.push(`https://${domain}${decoded.startsWith('/') ? '' : '/'}${decoded}`);\n      }\n    } catch {\n      // ignore\n    }\n  }\n\n  return [...new Set(urls)];\n}\n\nfunction getMainSection(text) {\n  const main = text.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n\n  const article = text.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n\n  const body = text.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n\n  return text;\n}\n\nfunction extractContentSections(text) {\n  const source = getMainSection(text);\n  const sections = [];\n\n  const patterns = [\n    { tag: 'p', re: /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi },\n    { tag: 'li', re: /<li\\b[^>]*>([\\s\\S]*?)<\\/li>/gi },\n    { tag: 'h', re: /<h[1-6]\\b[^>]*>([\\s\\S]*?)<\\/h[1-6]>/gi },\n    { tag: 'blockquote', re: /<blockquote\\b[^>]*>([\\s\\S]*?)<\\/blockquote>/gi },\n    { tag: 'figcaption', re: /<figcaption\\b[^>]*>([\\s\\S]*?)<\\/figcaption>/gi },\n    { tag: 'td', re: /<td\\b[^>]*>([\\s\\S]*?)<\\/td>/gi },\n    { tag: 'div', re: /<div\\b[^>]*>([\\s\\S]*?)<\\/div>/gi },\n    { tag: 'span', re: /<span\\b[^>]*>([\\s\\S]*?)<\\/span>/gi },\n  ];\n\n  for (const { tag, re } of patterns) {\n    for (const m of source.matchAll(re)) {\n      const text = stripHtml(m[1]);\n      if (!text) continue;\n\n      sections.push({\n        tag,\n        index: m.index ?? null,\n        text,\n        wordCount: text.split(/\\s+/).filter(Boolean).length,\n      });\n    }\n  }\n\n  // Preserve page order\n  sections.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));\n\n  // Exact dedupe only; do not semantically filter anything out\n  const seen = new Set();\n  const deduped = [];\n  for (const s of sections) {\n    const key = `${s.tag}::${s.text.toLowerCase()}`;\n    if (seen.has(key)) continue;\n    seen.add(key);\n    deduped.push(s);\n  }\n\n  return deduped;\n}\n\nfunction groupSectionsByTag(sections) {\n  const grouped = {};\n  for (const s of sections || []) {\n    if (!grouped[s.tag]) grouped[s.tag] = [];\n    grouped[s.tag].push(s.text);\n  }\n  return grouped;\n}\n\nconst title =\n  firstMatch(/<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<meta[^>]+name=[\"']twitter:title[\"'][^>]+content=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<title>([\\s\\S]*?)<\\/title>/i);\n\nconst description =\n  firstMatch(/<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<meta[^>]+property=[\"']og:description[\"'][^>]+content=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<meta[^>]+name=[\"']twitter:description[\"'][^>]+content=[\"']([^\"']+)[\"']/i);\n\nconst canonical =\n  firstMatch(/<link[^>]+rel=[\"']canonical[\"'][^>]+href=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<meta[^>]+property=[\"']og:url[\"'][^>]+content=[\"']([^\"']+)[\"']/i);\n\nconst ogImage =\n  firstMatch(/<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']/i) ||\n  firstMatch(/<meta[^>]+name=[\"']twitter:image[\"'][^>]+content=[\"']([^\"']+)[\"']/i);\n\nconst jsonLdBlocks = extractJsonLdBlocks(html);\nconst flatJsonLd = flattenJsonLd(jsonLdBlocks);\nconst imageUrls = extractImageUrls(html);\nconst contentSections = extractContentSections(html);\nconst sectionsByTag = groupSectionsByTag(contentSections);\nconst fullText = stripHtml(html);\nconst reviews = extractReviewSignals(html, flatJsonLd);\n\nreturn [\n  {\n    json: {\n      url,\n      question,\n      handle,\n      domain,\n      extracted: {\n        title,\n        description,\n        canonical,\n        ogImage,\n        imageUrls,\n        reviews,\n        jsonLdBlocks,\n        jsonLdTypes: [...new Set(flatJsonLd.map((x) => x?.['@type']).filter(Boolean))],\n        contentSections,\n        sectionsByTag,\n        fullText,\n        textSample: fullText.slice(0, 12000),\n      },\n      meta: {\n        htmlLength: html.length,\n        textLength: fullText.length,\n        jsonLdCount: jsonLdBlocks.length,\n        imageCount: imageUrls.length,\n        sectionCount: contentSections.length,\n        reviewDetected: reviews.hasReviews,\n        reviewCountDetected: reviews.reviewCount,\n        ratingValueDetected: reviews.ratingValue,\n      },\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        80
+      ],
+      "id": "d471cf34-285d-41aa-a569-75ed5b4ec6e1",
+      "name": "Extract Page Signals"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = items[0].json || {};\n\nfunction failure(stage, message) {\n  return [\n    {\n      json: {\n        success: false,\n        answer: null,\n        confidence: 'low',\n        evidence: [],\n        missing_data: [message],\n        improvement_suggestions: [\n          'Check the upstream LLM node output format.',\n          'Retry the request after verifying the extracted data.',\n        ],\n        question_type: 'other',\n        can_answer_directly: false,\n        error: {\n          stage,\n          message,\n        },\n      },\n    },\n  ];\n}\n\n// If the LLM node itself already errored\nif (input.error) {\n  return failure(\n    'llm_engine',\n    input.error.message || 'LLM node failed'\n  );\n}\n\nlet result;\n\ntry {\n  result = input.output?.[0]?.content?.[0]?.text;\n} catch {\n  return failure(\n    'llm_extract',\n    'Could not extract OpenAI response content'\n  );\n}\n\nif (!result) {\n  return failure(\n    'llm_extract',\n    'OpenAI response content was empty'\n  );\n}\n\nif (typeof result === 'string') {\n  try {\n    result = JSON.parse(result);\n  } catch {\n    return failure(\n      'llm_parse',\n      'OpenAI output was not valid JSON'\n    );\n  }\n}\n\nif (!result || typeof result !== 'object') {\n  return failure(\n    'llm_parse',\n    'OpenAI output was invalid or empty'\n  );\n}\n\nreturn [\n  {\n    json: {\n      success: Boolean(result.success ?? true),\n      answer: result.answer ?? null,\n      confidence: ['high', 'medium', 'low'].includes(result.confidence)\n        ? result.confidence\n        : 'low',\n      evidence: Array.isArray(result.evidence) ? result.evidence : [],\n      missing_data: Array.isArray(result.missing_data) ? result.missing_data : [],\n      improvement_suggestions: Array.isArray(result.improvement_suggestions)\n        ? result.improvement_suggestions\n        : [],\n      question_type: result.question_type ?? 'other',\n      can_answer_directly: Boolean(result.can_answer_directly),\n      error: result.error ?? null,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        64
+      ],
+      "id": "4c9fa92b-ca54-4d63-a81e-4ded91631373",
+      "name": "Normalise Open AI output"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1424,
+        64
+      ],
+      "id": "407e150e-aa57-41ec-af77-dcfa509725f2",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a product intelligence agent for Healf.\n\nYou are given:\n- a live Healf product page URL\n- a user question\n- structured product page data extracted from the live page\n\nYour task is to:\n1. Answer the user's question directly and accurately.\n2. Use only the provided extracted data.\n3. Never invent facts, infer missing details as if confirmed, or rely on outside knowledge.\n4. If the data is incomplete, ambiguous, conflicting, or absent, say so clearly.\n5. Ground every important claim in the extracted data.\n6. Provide useful observations, issues, or recommendations when relevant.\n7. Return only valid JSON that matches the required schema.\n\nRules:\n- Be concise but informative.\n- Prefer structured product data such as JSON-LD when available.\n- Use page text as supporting context.\n- For factual questions, answer directly and then add evidence.\n- For evaluative questions, give a clear judgment plus specific supporting reasons.\n- For missing information, explicitly state what cannot be determined from the page.\n- Do not expose internal field names, JSON keys, extraction variable names, or debugging language in user-facing text.\n- Do not quote large blocks of page text.\n- Do not include markdown.\n- Do not include any text outside the JSON object.\n\nQuality bar:\n- If something is only implied, qualify it with phrases like \"based on the extracted data\", \"appears to\", or \"I could not verify\".\n- Do not overstate certainty.\n- If the question asks for something not supported by the data, say that it cannot be confirmed from the page."
+            },
+            {
+              "content": "=Question:\n{{$json.question}}\n\nProduct URL:\n{{$json.url}}\n\nExtracted Product Data:\n{{JSON.stringify($json.extracted, null, 2)}}\n\nMetadata:\n{{JSON.stringify($json.meta, null, 2)}}\n\nInstructions:\n- Answer using only the extracted product data above.\n- Use evidence that is directly supported by the data.\n- If the answer is uncertain or incomplete, say so explicitly.\n- If the page data does not support a confident answer, set can_answer_directly to false.\n- Return only valid JSON that matches the schema."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"success\",\n    \"answer\",\n    \"confidence\",\n    \"question_type\",\n    \"can_answer_directly\",\n    \"evidence\",\n    \"missing_data\",\n    \"improvement_suggestions\"\n  ],\n  \"properties\": {\n    \"success\": {\n      \"type\": \"boolean\"\n    },\n    \"answer\": {\n      \"type\": \"string\",\n      \"description\": \"Direct response to the user's question.\"\n    },\n    \"confidence\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"high\",\n        \"medium\",\n        \"low\"\n      ]\n    },\n    \"question_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"ingredient_check\",\n        \"reviews_check\",\n        \"page_quality_review\",\n        \"seo_review\",\n        \"pricing_check\",\n        \"subscription_check\",\n        \"product_summary\",\n        \"comparison\",\n        \"general_question\",\n        \"other\"\n      ]\n    },\n    \"can_answer_directly\": {\n      \"type\": \"boolean\"\n    },\n    \"evidence\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Relevant evidence extracted from the provided page data.\"\n    },\n    \"missing_data\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Important missing or unclear information.\"\n    },\n    \"improvement_suggestions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Useful recommendations or suggested improvements for the page or answer.\"\n    }\n  }\n}"
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        848,
+        80
+      ],
+      "id": "05f92f45-12e5-4115-8acf-d4172c5f3fe1",
+      "name": "LLM Engine",
+      "retryOnFail": true,
+      "credentials": {
+        "openAiApi": {
+          "id": "4BlOkbPIP5LH94MV",
+          "name": "OpenAi account 2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "tableId": "product_agent_runs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $now }}"
+            },
+            {
+              "fieldId": "question",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.question}}"
+            },
+            {
+              "fieldId": "url",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.url}}"
+            },
+            {
+              "fieldId": "handle",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.handle}}"
+            },
+            {
+              "fieldId": "domain",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.domain}}"
+            },
+            {
+              "fieldId": "product_title",
+              "fieldValue": "={{$node[\"Extract Page Signals\"].json.extracted.title}}"
+            },
+            {
+              "fieldId": "product_description",
+              "fieldValue": "={{$node[\"Extract Page Signals\"].json.extracted.description}}"
+            },
+            {
+              "fieldId": "canonical_url",
+              "fieldValue": "={{$node[\"Extract Page Signals\"].json.extracted.canonical}}"
+            },
+            {
+              "fieldId": "og_image",
+              "fieldValue": "={{$node[\"Extract Page Signals\"].json.extracted.ogImage}}"
+            },
+            {
+              "fieldId": "extracted_json",
+              "fieldValue": "={{JSON.stringify($node[\"Extract Page Signals\"].json.extracted)}}"
+            },
+            {
+              "fieldId": "metadata_json",
+              "fieldValue": "={{JSON.stringify($node[\"Extract Page Signals\"].json.meta)}}"
+            },
+            {
+              "fieldId": "ai_response_json",
+              "fieldValue": "={{JSON.stringify($node[\"LLM Engine\"].json)}}"
+            },
+            {
+              "fieldId": "model",
+              "fieldValue": "gpt-4.1-mini"
+            },
+            {
+              "fieldId": "workflow_version",
+              "fieldValue": "v1"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "completed"
+            },
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{$execution.id}}"
+            },
+            {
+              "fieldId": "success",
+              "fieldValue": "={{$json.success}}"
+            },
+            {
+              "fieldId": "answer",
+              "fieldValue": "={{$json.answer}}"
+            },
+            {
+              "fieldId": "confidence",
+              "fieldValue": "={{$json.confidence}}"
+            },
+            {
+              "fieldId": "question_type",
+              "fieldValue": "={{$json.question_type}}"
+            },
+            {
+              "fieldId": "can_answer_directly",
+              "fieldValue": "={{$json.can_answer_directly}}"
+            },
+            {
+              "fieldId": "evidence_json",
+              "fieldValue": "={{JSON.stringify($json.evidence)}}"
+            },
+            {
+              "fieldId": "missing_data_json",
+              "fieldValue": "={{JSON.stringify($json.missing_data)}}"
+            },
+            {
+              "fieldId": "improvement_suggestions_json",
+              "fieldValue": "={{JSON.stringify($json.improvement_suggestions)}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        224
+      ],
+      "id": "563b4b23-7248-4871-9097-5ce319444776",
+      "name": "Data LOGs",
+      "credentials": {
+        "supabaseApi": {
+          "id": "eIyUA2GUZrzIMs7z",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate + Normalize Input').first().json || {};\nconst fetchNode = $('Fetch Page HTML').first().json || {};\n\nconst errorMessage =\n  fetchNode.error?.message ||\n  fetchNode.message ||\n  fetchNode.body?.message ||\n  'Failed to fetch page HTML';\n\nreturn [\n  {\n    json: {\n      success: false,\n      answer: null,\n      confidence: 'low',\n      evidence: [],\n      missing_data: [\n        `Could not fetch the product page HTML. ${errorMessage}`,\n      ],\n      improvement_suggestions: [\n        'Verify the product URL is correct and publicly accessible.',\n        'Check whether the page is blocking automated requests.',\n        'Retry the workflow after the page is available again.',\n      ],\n      question_type: 'other',\n      can_answer_directly: false,\n      error: {\n        stage: 'fetch_page_html',\n        message: errorMessage,\n      },\n      url: input.url || null,\n      question: input.question || null,\n      handle: input.handle || null,\n      domain: input.domain || null,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        560
+      ],
+      "id": "69d05eb7-d904-4da7-974c-c35729cf607c",
+      "name": "Build Fetch Failure Payload"
+    },
+    {
+      "parameters": {
+        "tableId": "product_agent_runs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $now }}"
+            },
+            {
+              "fieldId": "question",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.question}}"
+            },
+            {
+              "fieldId": "url",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.url}}"
+            },
+            {
+              "fieldId": "handle",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.handle}}"
+            },
+            {
+              "fieldId": "domain",
+              "fieldValue": "={{$node[\"Validate + Normalize Input\"].json.domain}}"
+            },
+            {
+              "fieldId": "workflow_version",
+              "fieldValue": "v1"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "failed"
+            },
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{$execution.id}}"
+            },
+            {
+              "fieldId": "success",
+              "fieldValue": "=false"
+            },
+            {
+              "fieldId": "answer",
+              "fieldValue": "={{$json.answer}}"
+            },
+            {
+              "fieldId": "confidence",
+              "fieldValue": "={{$json.confidence}}"
+            },
+            {
+              "fieldId": "can_answer_directly",
+              "fieldValue": "={{$json.can_answer_directly}}"
+            },
+            {
+              "fieldId": "ai_response_json",
+              "fieldValue": "={{JSON.stringify($json)}}"
+            },
+            {
+              "fieldId": "missing_data_json",
+              "fieldValue": "={{JSON.stringify($json.missing_data)}}"
+            },
+            {
+              "fieldId": "improvement_suggestions_json",
+              "fieldValue": "={{JSON.stringify($json.improvement_suggestions)}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        560
+      ],
+      "id": "2dfa15b9-f495-4486-a357-7ef24d14ee53",
+      "name": "Error LOG",
+      "credentials": {
+        "supabaseApi": {
+          "id": "eIyUA2GUZrzIMs7z",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = items[0].json || {};\n\nconst errorMessage =\n  input.error?.message ||\n  input.message ||\n  input.body?.message ||\n  'LLM processing failed';\n\nreturn [\n  {\n    json: {\n      success: false,\n      answer: null,\n      confidence: 'low',\n      evidence: [],\n      missing_data: [\n        `The AI evaluation step failed. ${errorMessage}`,\n      ],\n      improvement_suggestions: [\n        'Retry the request.',\n        'Verify the extracted product data is valid.',\n        'Check whether the model returned malformed output.',\n      ],\n      question_type: 'other',\n      can_answer_directly: false,\n      error: {\n        stage: 'llm_engine',\n        message: errorMessage,\n      },\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        304
+      ],
+      "id": "82b8deca-21b8-47dc-856b-3b79ccfd2f93",
+      "name": "Build LLM failure Payload"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 502
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1424,
+        400
+      ],
+      "id": "a7ad98ca-b8b7-48e1-b2fe-20582de4abaf",
+      "name": "Error Response - 502"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate + Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page HTML": {
+      "main": [
+        [
+          {
+            "node": "Extract Page Signals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Fetch Failure Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Page Signals": {
+      "main": [
+        [
+          {
+            "node": "LLM Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Open AI output": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Data LOGs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Engine": {
+      "main": [
+        [
+          {
+            "node": "Normalise Open AI output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build LLM failure Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Fetch Failure Payload": {
+      "main": [
+        [
+          {
+            "node": "Error LOG",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Error Response - 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM failure Payload": {
+      "main": [
+        [
+          {
+            "node": "Error LOG",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Error Response - 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "299f6a93-b119-4192-8037-838c6b8c9df1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "123784e6cf91862b069a4d55ef7078f64133850220a9a738c736e49efa35a861"
+  },
+  "id": "bRo6gRlk5jKE18HC",
+  "tags": []
+}
