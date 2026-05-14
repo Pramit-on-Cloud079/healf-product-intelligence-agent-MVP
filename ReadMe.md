@@ -47,6 +47,8 @@ LLM Engine
 Normalize Output
    ↓
 Respond + Persist
+```
+
 The architecture intentionally separates:
     • extraction from reasoning 
     • success handling from failure handling 
@@ -58,7 +60,7 @@ This improves:
     • debugging 
     • production readiness 
 
-Workflow Components
+## Workflow Components
 1. Webhook
 Accepts:
     • product URL 
@@ -131,7 +133,7 @@ Why this architecture was chosen
     • reduces token waste 
     • makes future extensions easier 
 
-LLM Evaluation Layer
+## LLM Evaluation Layer
 The reasoning layer uses GPT-4.1 Mini.
 The model:
     • answers questions using only extracted data 
@@ -158,7 +160,7 @@ Prompt design goals
     • encourage grounded reasoning 
     • explicitly acknowledge uncertainty when information is incomplete 
 
-Runtime Failure Handling
+## Runtime Failure Handling
 The workflow includes dedicated failure branches for:
     • page fetch failures 
     • LLM execution failures 
@@ -170,7 +172,7 @@ All failed executions are logged into Supabase for:
     • future evaluation datasets 
 This was intentionally added so the MVP behaves more like a resilient system rather than a linear demo workflow.
 
-Output Format
+## Output Format
 Responses are normalized into structured JSON.
 Example
 {
@@ -195,7 +197,7 @@ This structure makes the output reusable by:
     • analytics pipelines 
     • evaluation systems 
 
-Persistence Layer
+## Persistence Layer
 All workflow runs are stored in Supabase.
 Stored data includes
     • user question 
@@ -216,7 +218,7 @@ Why this matters
     • future fine-tuning datasets 
 Both successful and failed executions are persisted for traceability.
 
-Example Questions Supported
+## Example Questions Supported
 Reviews and Trust
     • Does this product have any reviews? 
     • What evidence suggests customers trust this product? 
@@ -273,7 +275,7 @@ Result
     • surfaced missing-data explanations 
 This was an important evaluation scenario because it tests hallucination resistance and uncertainty handling.
 
-Key Design Decisions
+## Key Design Decisions
 Why structured extraction before the LLM?
 Instead of sending raw HTML directly into the model, the workflow first extracts:
     • structured schemas 
@@ -304,7 +306,7 @@ The normalization layer ensures:
     • future analytics compatibility 
     • evaluation pipeline support 
 
-Current MVP Limitations
+## Current MVP Limitations
 This MVP intentionally prioritizes architecture and reasoning quality over breadth.
 Current limitations
     • no browser automation for interactive page states 
@@ -316,7 +318,7 @@ Current limitations
     • limited SEO scoring framework 
     • no formal ranking/scoring engine 
 
-What I Would Add Next
+## What I Would Add Next
 1. Vision-Based Image Understanding
 Add multimodal image analysis for:
     • packaging quality 
@@ -356,7 +358,7 @@ Add:
     • workflow reliability analytics 
     • automated evaluation datasets 
 
-What This Could Become in 3 Months
+## What This Could Become in 3 Months
 A production-grade ecommerce intelligence system capable of:
     • automated PDP audits 
     • conversion optimization recommendations 
@@ -382,7 +384,7 @@ Tech Stack
     • JavaScript 
     • Shopify storefront data 
 
-Repository Structure
+## Repository Structure
 /
 ├── README.md
 ├── workflow/
@@ -393,7 +395,6 @@ Repository Structure
 │   ├── seo-example.png
 │   ├── trust-example.png
 │   └── missing-data-example.png
-└── sample-outputs/
 
 Files Included
     • n8n workflow export JSON 
@@ -402,7 +403,7 @@ Files Included
     • example outputs 
     • live hosted MVP 
 
-Conclusion
+## Conclusion
 This MVP demonstrates a scalable approach to ecommerce product intelligence using:
     • structured extraction 
     • grounded reasoning 
