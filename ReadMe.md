@@ -60,6 +60,29 @@ This improves:
     • debugging 
     • production readiness 
 
+# Database Schema
+
+The Supabase persistence schema is included under:
+
+```text
+/database/supabase_schema.sql
+```
+
+The schema stores:
+- extracted product intelligence
+- AI responses
+- evidence and reasoning
+- workflow execution metadata
+- failure states
+- evaluation telemetry
+
+This was designed to support:
+- observability
+- debugging
+- analytics
+- future evaluation pipelines
+- potential fine-tuning datasets
+
 ## Workflow Components
 1. Webhook
 Accepts:
